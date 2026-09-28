@@ -51,14 +51,25 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    # Chuẩn hóa Unicode ẩn (zero-width chars, bidirectional marks, …)
+    import unicodedata
+    normalized = "".join(
+        ch for ch in user_input
+        if unicodedata.category(ch) not in ("Cf",)  # bỏ Format chars
+    )
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        r"ignore\s*(all\s+)?(previous|above|prior)\s+instructions",
+        r"you\s+are\s+now\b",
+        r"system\s*prompt",
+        r"reveal\s+(your\s+)?(instructions?|prompt|system|secrets?)",
+        r"pretend\s+(you\s+are|to\s+be)",
+        r"act\s+as\s+(a\s+|an\s+)?unrestricted",
+        r"(disregard|forget|override|bypass)\s+(all\s+)?(previous|prior|your)?\s*(instructions?|rules?|constraints?)",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, normalized, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -84,14 +95,30 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
+    import unicodedata
+
+    def _normalize(s: str) -> str:
+        """Bỏ dấu tiếng Việt để khớp với ALLOWED_TOPICS không dấu."""
+        nfkd = unicodedata.normalize("NFKD", s)
+        return "".join(c for c in nfkd if not unicodedata.combining(c))
+
     input_lower = user_input.lower()
+    input_normalized = _normalize(input_lower)  # không dấu, chữ thường
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    # 1. Nếu có topic bị cấm → chặn ngay
+    for bt in BLOCKED_TOPICS:
+        if bt in input_lower or bt in input_normalized:
+            return "BLOCK"
 
-    pass  # Replace with your implementation
+    # 2. Nếu không chứa topic banking nào → chặn
+    has_allowed = any(
+        at in input_lower or at in input_normalized for at in ALLOWED_TOPICS
+    )
+    if not has_allowed:
+        return "BLOCK"
+
+    # 3. Banking hợp lệ
+    return "ALLOW"
 
 
 # ============================================================
@@ -144,14 +171,24 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        # 1. Kiểm tra injection / jailbreak
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "⚠️ Yêu cầu của bạn bị chặn vì phát hiện dấu hiệu tấn công prompt injection. "
+                "Vui lòng đặt câu hỏi hợp lệ về dịch vụ ngân hàng VinBank."
+            )
 
-        pass  # Replace with your implementation
+        # 2. Kiểm tra chủ đề
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "⚠️ VinBank chỉ hỗ trợ các câu hỏi liên quan đến ngân hàng (tài khoản, "
+                "giao dịch, tiết kiệm, vay, thẻ tín dụng…). Vui lòng đặt lại câu hỏi."
+            )
+
+        # 3. An toàn → cho qua
+        return None
 
 
 # ============================================================

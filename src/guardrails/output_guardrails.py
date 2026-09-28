@@ -41,12 +41,11 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        "vn_phone": r"0\d{9,10}",
+        "email": r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}",
+        "national_id": r"\b\d{9}\b|\b\d{12}\b",
+        "api_key": r"sk-[a-zA-Z0-9_-]+",
+        "password": r"password\s*[:=]\s*\S+",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -172,16 +171,34 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        # 1. Kiểm tra PII / secret bằng content_filter
+        filter_result = content_filter(response_text)
+        if not filter_result["safe"]:
+            self.redacted_count += 1
+            redacted_text = filter_result["redacted"]
+            # Thay thế nội dung bằng bản đã redact
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=redacted_text)],
+            )
 
-        return llm_response  # TODO: modify if needed
+        # 2. (Optional) LLM-as-Judge — chỉ nếu đã khởi tạo judge
+        if self.use_llm_judge:
+            import asyncio
+            safety = asyncio.get_event_loop().run_until_complete(
+                llm_safety_check(self._extract_text(llm_response))
+            )
+            if not safety["safe"]:
+                self.blocked_count += 1
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(
+                        text="⚠️ Nội dung phản hồi không an toàn và đã bị chặn bởi hệ thống bảo vệ. "
+                             "Vui lòng liên hệ hỗ trợ VinBank."
+                    )],
+                )
+
+        return llm_response
 
 
 # ============================================================
